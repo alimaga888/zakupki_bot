@@ -823,6 +823,15 @@ def build_work_profile(
     loaded_files = loaded_files or []
     title = title or ""
 
+    free_revision_patterns = [
+    r"без\s+дополнительной\s+оплаты.{0,300}(?:изменен|дополнен|доработ|коррект)",
+    r"(?:изменен|дополнен|доработ|коррект).{0,300}без\s+дополнительной\s+оплаты",
+    r"(?:изменен|дополнен|доработ).{0,300}бесплатн",
+    r"доработан\w*\s+по\s+замечани\w*.{0,300}бесплатн",
+    r"вносит\s+в\s+проект\w*\s+изменен\w*\s+и\s+дополнен\w*.{0,300}бесплатн",
+    r"вносить\s+.*?изменени\w*\s+и\s+дополнени\w*.{0,300}бесплатн",
+    ]
+    
     profile = {
         "work_types": [],
         "deliverables": [],
@@ -851,6 +860,15 @@ def build_work_profile(
         },
     }
 
+    free_revisions_found = False
+
+    for pattern in free_revision_patterns:
+        if re.search(pattern, documents_text, re.IGNORECASE | re.DOTALL):
+            free_revisions_found = True
+            break
+
+    if free_revisions_found:
+        profile["risks"]["free_revisions"] = True
 
     # ========================================================
     # ПОЛУЧАЕМ ТЕКСТ РАБОЧИХ ДОКУМЕНТОВ
@@ -1496,6 +1514,31 @@ def get_node_for_code(page, code):
 
     return None
 
+def extract_completion_terms(text):
+    patterns = [
+        r"срок\s+выполнения\s+работ[^.]{0,250}",
+        r"срок\s+оказания\s+услуг[^.]{0,250}",
+        r"срок\s+выполнения[^.]{0,250}",
+        r"дата\s+окончания\s+оказания\s+услуг[^.]{0,250}",
+        r"окончани\w*\s+срока\s+выполнения[^.]{0,250}",
+    ]
+
+    results = []
+
+    for pattern in patterns:
+        matches = re.findall(
+            pattern,
+            text,
+            re.IGNORECASE
+        )
+
+        for match in matches:
+            clean = re.sub(r"\s+", " ", match).strip()
+
+            if clean and clean not in results:
+                results.append(clean)
+
+    return results[:5]
 
 # ============================================================
 # ПОЛУЧЕНИЕ НОМЕРА СТРАНИЦЫ
