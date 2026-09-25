@@ -5747,6 +5747,105 @@ with sync_playwright() as p:
                 "body"
             ).inner_text()
 
+
+            # -----------------------------------------------------
+            # ЕСЛИ КАРТОЧКА 223-ФЗ ЗАГРУЗИЛАСЬ ПУСТОЙ
+            # ПОВТОРЯЕМ ЗАГРУЗКУ
+            # -----------------------------------------------------
+
+            if (
+                tender["law"] == "223-ФЗ"
+                and len(card_text.strip()) < 500
+            ):
+
+                print()
+                print(
+                    "⚠ Карточка 223-ФЗ загрузилась некорректно."
+                )
+                print(
+                    "Повторяем загрузку..."
+                )
+
+                for attempt in range(1, 4):
+
+                    try:
+
+                        print(
+                            f"  Попытка {attempt}/3..."
+                        )
+
+                        tender_page.reload(
+                            wait_until="domcontentloaded",
+                            timeout=120000
+                        )
+
+                        tender_page.wait_for_timeout(
+                            3000 + attempt * 1000
+                        )
+
+                        card_text = tender_page.locator(
+                            "body"
+                        ).inner_text()
+
+                        print(
+                            "  Размер текста:",
+                            len(card_text)
+                        )
+
+                        if len(card_text.strip()) >= 500:
+
+                            print(
+                                "  ✅ Карточка успешно загрузилась."
+                            )
+
+                            break
+
+                    except Exception as e:
+
+                        print(
+                            "  ⚠ Ошибка повторной загрузки:",
+                            e
+                        )
+
+
+            # -----------------------------------------------------
+            # ЕСЛИ ПОСЛЕ 3 ПОПЫТОК КАРТОЧКА ВСЁ ЕЩЁ ПУСТАЯ
+            # -----------------------------------------------------
+
+            if (
+                tender["law"] == "223-ФЗ"
+                and len(card_text.strip()) < 500
+            ):
+
+                print()
+                print(
+                    "❌ Карточка 223-ФЗ так и не загрузилась."
+                )
+
+                processed[
+                    "card_text"
+                ] = card_text
+
+                processed[
+                    "status"
+                ] = "card_load_failed"
+
+                processed[
+                    "skip_reason"
+                ] = (
+                    "Карточка 223-ФЗ загрузилась некорректно "
+                    "или вернула слишком мало данных"
+                )
+
+                processed_tenders.append(
+                    processed
+                )
+
+                tender_page.close()
+
+                continue
+
+
             processed[
                 "card_text"
             ] = card_text
@@ -7070,6 +7169,253 @@ for index, item in enumerate(
             skip_reason
         )
 
+# ============================================================
+# ПОДХОДЯЩИЕ ЗАКУПКИ
+# ============================================================
+
+print()
+print("=" * 70)
+print("ПОДХОДЯЩИЕ ЗАКУПКИ")
+print("=" * 70)
+
+
+suitable_tenders = [
+    item
+    for item in current_results
+    if item.get("status") == "ok"
+]
+
+
+print()
+print(
+    "Закупок после всех фильтров:",
+    len(suitable_tenders)
+)
+
+
+if suitable_tenders:
+
+    for index, item in enumerate(
+        suitable_tenders,
+        start=1
+    ):
+
+        number = item.get(
+            "number",
+            "неизвестно"
+        )
+
+        law = item.get(
+            "law",
+            "неизвестно"
+        )
+
+        title = item.get(
+            "title",
+            "неизвестно"
+        )
+
+        price = item.get(
+            "price",
+            "неизвестно"
+        )
+
+        deadline = item.get(
+            "application_deadline",
+            "неизвестно"
+        )
+
+        tender_url = item.get(
+            "tender_url",
+            ""
+        )
+
+        documents_url = item.get(
+            "documents_url",
+            ""
+        )
+
+        work_profile = item.get(
+            "work_profile",
+            {}
+        )
+
+        economics = item.get(
+            "economics",
+            {}
+        )
+
+        work_types = work_profile.get(
+            "work_types",
+            []
+        )
+
+        deliverables = work_profile.get(
+            "deliverables",
+            []
+        )
+
+        risks = work_profile.get(
+            "risks",
+            {}
+        )
+
+        risk_flags = economics.get(
+            "risk_flags",
+            []
+        )
+
+        max_freelancer_budget = economics.get(
+            "max_freelancer_budget"
+        )
+
+        expected_profit = economics.get(
+            "expected_profit"
+        )
+
+        completion_terms = work_profile.get(
+            "completion_terms",
+            []
+        )
+
+        revision_terms = work_profile.get(
+            "revision_terms",
+            []
+        )
+
+
+        print()
+        print("-" * 70)
+
+        print(
+            f"{index}. {number} ({law})"
+        )
+
+        print(
+            "Название:",
+            title
+        )
+
+        print(
+            "Цена контракта:",
+            price
+        )
+
+        print(
+            "Крайний срок подачи:",
+            deadline
+        )
+
+
+        if work_types:
+
+            print()
+            print("Типы работ:")
+
+            for work_type in work_types:
+
+                print(
+                    f"  • {work_type}"
+                )
+
+
+        if deliverables:
+
+            print()
+            print("Результаты / материалы:")
+
+            for deliverable in deliverables:
+
+                print(
+                    f"  • {deliverable}"
+                )
+
+
+        print()
+        print("ЭКОНОМИКА:")
+
+        print(
+            "  Максимальный бюджет подрядчика:",
+            max_freelancer_budget
+            if max_freelancer_budget is not None
+            else "не рассчитан"
+        )
+
+        print(
+            "  Планируемая прибыль:",
+            expected_profit
+            if expected_profit is not None
+            else "не рассчитана"
+        )
+
+
+        if risk_flags:
+
+            print()
+            print("Факторы риска:")
+
+            for risk in risk_flags:
+
+                print(
+                    f"  ⚠ {risk}"
+                )
+
+        else:
+
+            print()
+            print(
+                "Факторы риска: явно не обнаружены"
+            )
+
+
+        if completion_terms:
+
+            print()
+            print("Сроки выполнения работ:")
+
+            for term in completion_terms:
+
+                print(
+                    f"  → {term}"
+                )
+
+
+        if revision_terms:
+
+            print()
+            print("Доработки / замечания:")
+
+            for revision in revision_terms:
+
+                print(
+                    f"  ⚠ {revision}"
+                )
+
+
+        print()
+        print("Ссылка на закупку:")
+
+        print(
+            f"  {tender_url}"
+        )
+
+
+        if documents_url:
+
+            print()
+            print("Документы:")
+
+            print(
+                f"  {documents_url}"
+            )
+
+
+else:
+
+    print()
+    print(
+        "Подходящих закупок в текущем запуске не найдено."
+    )
 
 # ============================================================
 # СТРУКТУРА ПЕРВОГО ТЕНДЕРА
@@ -7077,7 +7423,9 @@ for index, item in enumerate(
 
 print()
 print("=" * 70)
-print("СТРУКТУРА ПЕРВОГО ТЕНДЕРА")
+print(
+    "СТРУКТУРА ПЕРВОЙ УСПЕШНО ОБРАБОТАННОЙ ЗАКУПКИ"
+)
 print("=" * 70)
 
 
