@@ -205,6 +205,16 @@ QUICK_REJECT_TITLE_KEYWORDS = [
 
     "инвентаризац кладбищ",
     "инвентаризация кладбищ",
+
+    # Лес / расчистка территории
+    "лесорасчист",
+    "лесонасаждени",
+    "вырубк лес",
+    "расчистк лес",
+
+    # Специализированные строительные элементы
+    "пожарной лестниц",
+    "пожарн лестниц",
 ]
 
 # ============================================================
@@ -224,6 +234,9 @@ QUICK_REJECT_TITLE_COMBINATIONS = [
     ("захорон", "кладбищ"),
 
     ("землян", "работ"),
+
+    ("монтаж", "лестниц"),
+    ("пожарн", "лестниц"),
 ]
 
 # Признаки интересного для нас типа работ.
@@ -769,27 +782,52 @@ def deep_screen_documents(
         "file_findings": file_findings,
     }
 
-def extract_evidence_snippets(text, patterns, max_snippets=3):
+def extract_evidence_snippets(
+    text,
+    patterns,
+    max_snippets=3,
+    before_chars=250,
+    after_chars=500
+):
     """
     Ищет небольшие фрагменты текста вокруг важных условий.
-    Используется для структурного анализа закупки.
     """
+
     snippets = []
 
     for pattern in patterns:
+
         try:
-            matches = re.finditer(pattern, text, re.IGNORECASE)
+            matches = re.finditer(
+                pattern,
+                text,
+                re.IGNORECASE | re.DOTALL
+            )
+
         except re.error:
             continue
 
         for match in matches:
-            start = max(0, match.start() - 250)
-            end = min(len(text), match.end() + 500)
+
+            start = max(
+                0,
+                match.start() - before_chars
+            )
+
+            end = min(
+                len(text),
+                match.end() + after_chars
+            )
 
             snippet = text[start:end]
-            snippet = re.sub(r"\s+", " ", snippet).strip()
 
-            if len(snippet) < 30:
+            snippet = re.sub(
+                r"\s+",
+                " ",
+                snippet
+            ).strip()
+
+            if len(snippet) < 20:
                 continue
 
             if snippet in snippets:
@@ -802,6 +840,121 @@ def extract_evidence_snippets(text, patterns, max_snippets=3):
 
     return snippets
 
+TARGET_MARGIN_PERCENT = 25
+OTHER_COST_PERCENT = 5
+
+
+def parse_price_value(price):
+    if not price:
+        return None
+
+    text = str(price)
+
+    text = (
+        text
+        .replace("\u00a0", "")
+        .replace(" ", "")
+        .replace(",", ".")
+    )
+
+    text = re.sub(
+        r"[^0-9.]",
+        "",
+        text
+    )
+
+    if not text:
+        return None
+
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def build_economics_profile(tender):
+    """
+    Предварительная экономика закупки.
+
+    Не пытается угадывать реальную цену фрилансера.
+    Показывает максимальный допустимый бюджет на подрядчика
+    при заданной целевой марже.
+    """
+
+    price = parse_price_value(
+        tender.get("price")
+    )
+
+    result = {
+        "contract_price": price,
+        "target_margin_percent": TARGET_MARGIN_PERCENT,
+        "other_cost_percent": OTHER_COST_PERCENT,
+        "max_freelancer_budget": None,
+        "expected_profit": None,
+        "work_types": [],
+        "risk_count": 0,
+        "risk_flags": [],
+    }
+
+    if price is None:
+        return result
+
+    work_profile = tender.get(
+        "work_profile",
+        {}
+    )
+
+    result["work_types"] = work_profile.get(
+        "work_types",
+        []
+    )
+
+    risks = work_profile.get(
+        "risks",
+        {}
+    )
+
+    risk_names = {
+        "engineering": "инженерные изыскания",
+        "specialists": "специалисты",
+        "estimates": "сметная документация",
+        "expertise": "экспертиза",
+        "approvals": "согласования",
+        "unlimited_revisions": "неограниченные доработки",
+        "free_revisions": "бесплатные доработки",
+        "supervision": "надзор",
+        "construction": "строительные работы",
+    }
+
+    for key, label in risk_names.items():
+
+        if risks.get(key):
+            result["risk_count"] += 1
+            result["risk_flags"].append(label)
+
+    reserved_for_profit_and_costs = (
+        TARGET_MARGIN_PERCENT
+        + OTHER_COST_PERCENT
+    )
+
+    max_freelancer_budget = price * (
+        1
+        - reserved_for_profit_and_costs / 100
+    )
+
+    expected_profit = price * (
+        TARGET_MARGIN_PERCENT / 100
+    )
+
+    result["max_freelancer_budget"] = (
+        round(max_freelancer_budget, 2)
+    )
+
+    result["expected_profit"] = (
+        round(expected_profit, 2)
+    )
+
+    return result
 
 def build_work_profile(
     documents_text,
@@ -824,12 +977,30 @@ def build_work_profile(
     title = title or ""
 
     free_revision_patterns = [
-    r"без\s+дополнительной\s+оплаты.{0,300}(?:изменен|дополнен|доработ|коррект)",
-    r"(?:изменен|дополнен|доработ|коррект).{0,300}без\s+дополнительной\s+оплаты",
-    r"(?:изменен|дополнен|доработ).{0,300}бесплатн",
-    r"доработан\w*\s+по\s+замечани\w*.{0,300}бесплатн",
-    r"вносит\s+в\s+проект\w*\s+изменен\w*\s+и\s+дополнен\w*.{0,300}бесплатн",
-    r"вносить\s+.*?изменени\w*\s+и\s+дополнени\w*.{0,300}бесплатн",
+
+        r"без\s+дополнительн\w*\s+оплат\w*"
+        r".{0,250}"
+        r"(?:вносить|внести|доработ\w*|измен\w*|корректир\w*)",
+
+        r"(?:вносить|внести|доработ\w*|измен\w*|корректир\w*)"
+        r".{0,250}"
+        r"без\s+дополнительн\w*\s+оплат\w*",
+
+        r"(?:доработ\w*|измен\w*|корректир\w*)"
+        r".{0,250}"
+        r"бесплатн\w*",
+
+        r"бесплатн\w*"
+        r".{0,250}"
+        r"(?:доработ\w*|измен\w*|корректир\w*)",
+
+        r"доработ\w*\s+по\s+замечан\w*"
+        r".{0,250}"
+        r"бесплатн\w*",
+
+        r"изменен\w*\s+и\s+дополнен\w*"
+        r".{0,250}"
+        r"бесплатн\w*",
     ]
     
     profile = {
@@ -1330,32 +1501,50 @@ def build_work_profile(
     # ========================================================
 
     completion_patterns = [
+        r"(?:срок\s+выполнения(?:\s+работ)?|срок\s+исполнения(?:\s+работ)?)\s*[:\-–]?\s*"
+        r".{0,220}?"
+        r"(?:(?:до|по)\s+\d{1,2}[./]\d{1,2}[./]\d{4}|(?:до|по)\s+\d{1,2}\s+"
+        r"(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)"
+        r"\s+\d{4})",
 
-        r"(?:срок\w*|срок\s+исполнени\w*).{0,500}"
-        r"(?:до\s+)?"
-        r"\d{1,2}[./]\d{1,2}[./]\d{4}",
+        r"(?:срок\s+оказания\s+услуг\w*|срок\s+оказания\s+услуги)\s*[:\-–]?\s*"
+        r".{0,220}?"
+        r"(?:(?:до|по)\s+\d{1,2}[./]\d{1,2}[./]\d{4}|(?:до|по)\s+\d{1,2}\s+"
+        r"(?:января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)"
+        r"\s+\d{4})",
 
-        r"(?:выполн\w*|оказан\w*).{0,300}"
-        r"(?:до\s+)?"
-        r"\d{1,2}[./]\d{1,2}[./]\d{4}",
-
-        r"(?:\d{1,2}[./]\d{1,2}[./]\d{4}).{0,250}"
-        r"(?:срок\w*|выполн\w*|оказан\w*)",
-
-        r"до\s+\d{1,2}\s+"
-        r"(?:января|февраля|марта|апреля|мая|июня|"
-        r"июля|августа|сентября|октября|ноября|декабря)"
-        r"\s+\d{4}",
+        r"(?:дата\s+окончания\s+оказания\s+услуг?\w*|дата\s+окончания\s+выполнения\s+работ)"
+        r"\s*[:\-–]?\s*\d{1,2}[./]\d{1,2}[./]\d{4}",
     ]
 
+    completion_sources = [
+        contract_text,
+        work_text,
+        documents_text,
+    ]
 
-    profile["completion_terms"] = (
-        extract_evidence_snippets(
-            contract_text,
+    completion_terms = []
+
+    for source_text in completion_sources:
+        if not source_text:
+            continue
+
+        found = extract_evidence_snippets(
+            source_text,
             completion_patterns,
-            max_snippets=5
+            max_snippets=5,
+            before_chars=0,
+            after_chars=80
         )
-    )
+
+        for snippet in found:
+            if snippet not in completion_terms:
+                completion_terms.append(snippet)
+
+        if len(completion_terms) >= 5:
+            break
+
+    profile["completion_terms"] = completion_terms[:5]
 
 
     # ========================================================
@@ -1400,12 +1589,12 @@ def build_work_profile(
         )
     )
 
-    free_revision_terms = (
-        extract_evidence_snippets(
-            contract_text,
-            free_revision_patterns,
-            max_snippets=5
-        )
+    free_revision_terms = extract_evidence_snippets(
+        contract_text,
+        free_revision_patterns,
+        max_snippets=5,
+        before_chars=80,
+        after_chars=180
     )
 
     if free_revision_terms:
@@ -6386,6 +6575,58 @@ with sync_playwright() as p:
             )
 
             processed["work_profile"] = work_profile
+
+            economics = build_economics_profile(
+                processed
+            )
+
+            processed["economics"] = economics
+
+            print()
+            print("=" * 60)
+            print("ЭКОНОМИКА ЗАКУПКИ")
+            print("=" * 60)
+
+            print(
+                "Цена контракта:",
+                economics["contract_price"]
+            )
+
+            print(
+                "Целевая маржа:",
+                f'{economics["target_margin_percent"]}%'
+            )
+
+            print(
+                "Прочие расходы:",
+                f'{economics["other_cost_percent"]}%'
+            )
+
+            print(
+                "Максимальный бюджет на подрядчика:",
+                economics["max_freelancer_budget"]
+            )
+
+            print(
+                "Планируемая прибыль:",
+                economics["expected_profit"]
+            )
+
+            if economics["risk_flags"]:
+
+                print()
+                print("Факторы риска:")
+
+                for risk in economics["risk_flags"]:
+                    print(
+                        "  ⚠",
+                        risk
+                    )
+
+            else:
+
+                print()
+                print("Факторы риска: явно не обнаружены")
 
             print()
             print("=" * 60)
